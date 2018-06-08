@@ -16,6 +16,8 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
         private readonly SchemaRegistrySettings _schemaRegistrySettings;
 
         private IList<Func<XPathDocument>> _xmlDocFactories;
+        private bool _includeControllerXmlComments;
+        private List<FilterDescriptor<IParameterFilter>> _parameterFilterDescriptors;
         private List<FilterDescriptor<IOperationFilter>> _operationFilterDescriptors;
         private List<FilterDescriptor<IDocumentFilter>> _documentFilterDescriptors;
         private List<FilterDescriptor<ISchemaFilter>> _schemaFilterDescriptors;
@@ -32,6 +34,7 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
             _schemaRegistrySettings = new SchemaRegistrySettings();
 
             _xmlDocFactories = new List<Func<XPathDocument>>();
+            _parameterFilterDescriptors = new List<FilterDescriptor<IParameterFilter>>();
             _operationFilterDescriptors = new List<FilterDescriptor<IOperationFilter>>();
             _documentFilterDescriptors = new List<FilterDescriptor<IDocumentFilter>>();
             _schemaFilterDescriptors = new List<FilterDescriptor<ISchemaFilter>>();
@@ -69,6 +72,15 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
         public void IgnoreObsoleteActions()
         {
             _swaggerGeneratorSettings.IgnoreObsoleteActions = true;
+        }
+
+        /// <summary>
+        /// Merge actions that have conflicting HTTP methods and paths (must be unique for Swagger 2.0)
+        /// </summary>
+        /// <param name="resolver"></param>
+        public void ResolveConflictingActions(Func<IEnumerable<ApiDescription>, ApiDescription> resolver)
+        {
+            _swaggerGeneratorSettings.ConflictingActionsResolver = resolver;
         }
 
         /// <summary>
@@ -110,6 +122,20 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
         }
 
         /// <summary>
+        /// Adds a global security requirement
+        /// </summary>
+        /// <param name="requirement">
+        /// A dictionary of required schemes (logical AND). Keys must correspond to schemes defined through AddSecurityDefinition
+        /// If the scheme is of type "oauth2", then the value is a list of scopes, otherwise it MUST be an empty array
+        /// </param>
+        public void AddSecurityRequirement(IDictionary<string, IEnumerable<string>> requirement)
+        {
+            _swaggerGeneratorSettings.SecurityRequirements.Add(requirement);
+        }
+
+
+
+        /// <summary>
         /// Provide a custom mapping, for a given type, to the Swagger-flavored JSONSchema
         /// </summary>
         /// <param name="type">System type</param>
@@ -146,6 +172,14 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
         }
 
         /// <summary>
+        /// Use referenced definitions for enum types within body parameter and response schemas
+        /// </summary>
+        public void UseReferencedDefinitionsForEnums()
+        {
+            _schemaRegistrySettings.UseReferencedDefinitionsForEnums = true;
+        }
+
+        /// <summary>
         /// Provide a custom strategy for generating the unique Id's that are used to reference object Schema's
         /// </summary>
         /// <param name="schemaIdSelector">
@@ -162,6 +196,21 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
         public void IgnoreObsoleteProperties()
         {
             _schemaRegistrySettings.IgnoreObsoleteProperties = true;
+        }
+
+        /// <summary>
+        /// Extend the Swagger Generator with "filters" that can modify Parameters after they're initially generated
+        /// </summary>
+        /// <typeparam name="TFilter">A type that derives from IParameterFilter</typeparam>
+        /// <param name="parameters">Optionally inject parameters through filter constructors</param>
+        public void ParameterFilter<TFilter>(params object[] parameters)
+            where TFilter : IParameterFilter
+        {
+            _parameterFilterDescriptors.Add(new FilterDescriptor<IParameterFilter>
+            {
+                Type = typeof(TFilter),
+                Arguments = parameters
+            });
         }
 
         /// <summary>
@@ -213,18 +262,27 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
         /// Inject human-friendly descriptions for Operations, Parameters and Schemas based on XML Comment files
         /// </summary>
         /// <param name="xmlDocFactory">A factory method that returns XML Comments as an XPathDocument</param>
-        public void IncludeXmlComments(Func<XPathDocument> xmlDocFactory)
+        /// <param name="includeControllerXmlComments">
+        /// Flag to indicate if controller XML comments (i.e. summary) should be used to assign Tag descriptions.
+        /// Don't set this flag if you're customizing the default tag for operations via TagActionsBy.
+        /// </param>
+        public void IncludeXmlComments(Func<XPathDocument> xmlDocFactory, bool includeControllerXmlComments = false)
         {
             _xmlDocFactories.Add(xmlDocFactory);
+            _includeControllerXmlComments = includeControllerXmlComments;
         }
 
         /// <summary>
         /// Inject human-friendly descriptions for Operations, Parameters and Schemas based on XML Comment files
         /// </summary>
         /// <param name="filePath">An abolsute path to the file that contains XML Comments</param>
-        public void IncludeXmlComments(string filePath)
+        /// <param name="includeControllerXmlComments">
+        /// Flag to indicate if controller XML comments (i.e. summary) should be used to assign Tag descriptions.
+        /// Don't set this flag if you're customizing the default tag for operations via TagActionsBy.
+        /// </param>
+        public void IncludeXmlComments(string filePath, bool includeControllerXmlComments = false)
         {
-            IncludeXmlComments(() => new XPathDocument(filePath));
+            IncludeXmlComments(() => new XPathDocument(filePath), includeControllerXmlComments);
         }
 
         internal ISwaggerProvider CreateSwaggerProvider(IServiceProvider serviceProvider)
@@ -237,8 +295,11 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
             foreach (var xmlDocFactory in _xmlDocFactories)
             {
                 var xmlDoc = xmlDocFactory();
-                swaggerGeneratorSettings.OperationFilters.Insert(0, new XmlCommentsOperationFilter(xmlDoc));
                 schemaRegistrySettings.SchemaFilters.Insert(0, new XmlCommentsSchemaFilter(xmlDoc));
+                swaggerGeneratorSettings.OperationFilters.Insert(0, new XmlCommentsOperationFilter(xmlDoc));
+
+                if (_includeControllerXmlComments)
+                    swaggerGeneratorSettings.DocumentFilters.Insert(0, new XmlCommentsDocumentFilter(xmlDoc));
             }
 
             var schemaRegistryFactory = new SchemaRegistryFactory(
@@ -268,6 +329,11 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
         private SwaggerGeneratorSettings CreateSwaggerGeneratorSettings(IServiceProvider serviceProvider)
         {
             var settings = _swaggerGeneratorSettings.Clone();
+
+            foreach (var filter in CreateFilters(_parameterFilterDescriptors, serviceProvider))
+            {
+                settings.ParameterFilters.Add(filter);
+            }
 
             foreach (var filter in CreateFilters(_operationFilterDescriptors, serviceProvider))
             {

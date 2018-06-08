@@ -11,9 +11,11 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
         {
             SwaggerDocs = new Dictionary<string, Info>();
             DocInclusionPredicate = (docName, api) => api.GroupName == null || api.GroupName == docName;
-            TagSelector = (apiDesc) => apiDesc.ControllerName();
+            TagSelector = (apiDesc) => apiDesc.ActionDescriptor.RouteValues["controller"];
             SortKeySelector = (apiDesc) => TagSelector(apiDesc);
             SecurityDefinitions = new Dictionary<string, SecurityScheme>();
+            SecurityRequirements = new List<IDictionary<string, IEnumerable<string>>>();
+            ParameterFilters = new List<IParameterFilter>();
             OperationFilters = new List<IOperationFilter>();
             DocumentFilters = new List<IDocumentFilter>();
         }
@@ -24,6 +26,8 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
 
         public bool IgnoreObsoleteActions { get; set; }
 
+        public Func<IEnumerable<ApiDescription>, ApiDescription> ConflictingActionsResolver { get; set; }
+
         public Func<ApiDescription, string> TagSelector { get; set; }
 
         public Func<ApiDescription, string> SortKeySelector { get; set; }
@@ -31,6 +35,10 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
         public bool DescribeAllParametersInCamelCase { get; set; }
 
         public IDictionary<string, SecurityScheme> SecurityDefinitions { get; private set; }
+
+        public IList<IDictionary<string, IEnumerable<string>>> SecurityRequirements { get; private set; }
+
+        public IList<IParameterFilter> ParameterFilters { get; private set; }
 
         public IList<IOperationFilter> OperationFilters { get; private set; }
 
@@ -43,10 +51,13 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
                 SwaggerDocs = SwaggerDocs,
                 DocInclusionPredicate = DocInclusionPredicate,
                 IgnoreObsoleteActions = IgnoreObsoleteActions,
+                ConflictingActionsResolver = ConflictingActionsResolver,
                 TagSelector = TagSelector,
                 SortKeySelector = SortKeySelector,
                 DescribeAllParametersInCamelCase = DescribeAllParametersInCamelCase,
                 SecurityDefinitions = SecurityDefinitions,
+                SecurityRequirements = SecurityRequirements,
+                ParameterFilters = ParameterFilters,
                 OperationFilters = OperationFilters,
                 DocumentFilters = DocumentFilters
             };

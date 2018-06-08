@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.Serialization;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
 using Newtonsoft.Json.Converters;
@@ -53,11 +54,20 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
 
         private Schema CreateSchema(Type type, Queue<Type> referencedTypes)
         {
+            // If Option<T> (F#), use the type argument
+            if (type.IsFSharpOption())
+                type = type.GetGenericArguments()[0];
+
             var jsonContract = _jsonContractResolver.ResolveContract(type);
 
             var createReference = !_settings.CustomTypeMappings.ContainsKey(type)
                 && type != typeof(object)
-                && (jsonContract is JsonObjectContract || jsonContract.IsSelfReferencingArrayOrDictionary());
+                && (// Type describes an object
+                    jsonContract is JsonObjectContract ||
+                    // Type is self-referencing
+                    jsonContract.IsSelfReferencingArrayOrDictionary() ||
+                    // Type is enum and opt-in flag set
+                    (type.GetTypeInfo().IsEnum && _settings.UseReferencedDefinitionsForEnums));
 
             return createReference
                 ? CreateReferenceSchema(type, referencedTypes)
@@ -107,8 +117,10 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
 
         private Schema CreatePrimitiveSchema(JsonPrimitiveContract primitiveContract)
         {
-            var type = Nullable.GetUnderlyingType(primitiveContract.UnderlyingType)
-                ?? primitiveContract.UnderlyingType;
+            // If Nullable<T>, use the type argument
+            var type = primitiveContract.UnderlyingType.IsNullable()
+                ? Nullable.GetUnderlyingType(primitiveContract.UnderlyingType)
+                : primitiveContract.UnderlyingType;
 
             if (type.GetTypeInfo().IsEnum)
                 return CreateEnumSchema(primitiveContract, type);
@@ -130,12 +142,24 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
                 var camelCase = _settings.DescribeStringEnumsInCamelCase
                     || (stringEnumConverter != null && stringEnumConverter.CamelCaseText);
 
+                var enumNames = type.GetFields(BindingFlags.Public | BindingFlags.Static)
+                    .Select(f =>
+                    {
+                        var name = f.Name;
+
+                        var enumMemberAttribute = f.GetCustomAttributes().OfType<EnumMemberAttribute>().FirstOrDefault();
+                        if (enumMemberAttribute != null && enumMemberAttribute.Value != null)
+                        {
+                            name = enumMemberAttribute.Value;
+                        }
+
+                        return camelCase ? name.ToCamelCase() : name;
+                    });
+
                 return new Schema
                 {
                     Type = "string",
-                    Enum = (camelCase)
-                        ? Enum.GetNames(type).Select(name => name.ToCamelCase()).ToArray()
-                        : Enum.GetNames(type)
+                    Enum = enumNames.ToArray()
                 };
             }
 
@@ -185,22 +209,29 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
 
         private Schema CreateObjectSchema(JsonObjectContract jsonContract, Queue<Type> referencedTypes)
         {
-            var properties = jsonContract.Properties
-                .Where(p => !p.Ignored)
-                .Where(p => !(_settings.IgnoreObsoleteProperties && p.IsObsolete()))
+            var applicableJsonProperties = jsonContract.Properties
+                .Where(prop => !prop.Ignored)
+                .Where(prop => !(_settings.IgnoreObsoleteProperties && prop.IsObsolete()))
+                .Select(prop => prop);
+
+            var required = applicableJsonProperties
+                .Where(prop => prop.IsRequired())
+                .Select(propInfo => propInfo.PropertyName)
+                .ToList();
+
+            var hasExtensionData = jsonContract.ExtensionDataValueType != null;
+
+            var properties = applicableJsonProperties
                 .ToDictionary(
                     prop => prop.PropertyName,
                     prop => CreateSchema(prop.PropertyType, referencedTypes).AssignValidationProperties(prop)
                 );
 
-            var required = jsonContract.Properties.Where(prop => prop.IsRequired())
-                .Select(propInfo => propInfo.PropertyName)
-                .ToList();
-
             var schema = new Schema
             {
                 Required = required.Any() ? required : null, // required can be null but not empty
                 Properties = properties,
+                AdditionalProperties = hasExtensionData ? new Schema { Type = "object" } : null,
                 Type = "object"
             };
 
@@ -218,8 +249,8 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
             { typeof(float), () => new Schema { Type = "number", Format = "float" } },
             { typeof(double), () => new Schema { Type = "number", Format = "double" } },
             { typeof(decimal), () => new Schema { Type = "number", Format = "double" } },
-            { typeof(byte), () => new Schema { Type = "string", Format = "byte" } },
-            { typeof(sbyte), () => new Schema { Type = "string", Format = "byte" } },
+            { typeof(byte), () => new Schema { Type = "integer", Format = "int32" } },
+            { typeof(sbyte), () => new Schema { Type = "integer", Format = "int32" } },
             { typeof(byte[]), () => new Schema { Type = "string", Format = "byte" } },
             { typeof(sbyte[]), () => new Schema { Type = "string", Format = "byte" } },
             { typeof(bool), () => new Schema { Type = "boolean" } },
