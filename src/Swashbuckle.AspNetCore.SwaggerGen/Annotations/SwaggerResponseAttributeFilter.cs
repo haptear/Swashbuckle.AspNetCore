@@ -1,6 +1,7 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
+using System.Collections.Generic;
 using Microsoft.AspNetCore.Mvc.ApiExplorer;
 using Swashbuckle.AspNetCore.Swagger;
 
@@ -10,7 +11,7 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
     {
         public void Apply(Operation operation, OperationFilterContext context)
         {
-            if (context.ControllerActionDescriptor == null) return;
+            if (context.MethodInfo == null) return;
             if (operation == null)
             {
                 throw new ArgumentNullException(nameof(operation));
@@ -20,6 +21,9 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
             {
                 throw new ArgumentNullException(nameof(context));
             }
+            var swaggerResponseAttributes = context.MethodInfo.GetCustomAttributes(true)
+                .Union(context.MethodInfo.DeclaringType.GetTypeInfo().GetCustomAttributes(true))
+                .OfType<SwaggerResponseAttribute>();
 
             var apiDesc = context.ApiDescription;
             var attributes = GetActionAttributes(apiDesc);
