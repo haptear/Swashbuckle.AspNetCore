@@ -1,5 +1,7 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
+using Microsoft.AspNetCore.Mvc.ApiExplorer;
 using Swashbuckle.AspNetCore.Swagger;
 
 namespace Swashbuckle.AspNetCore.SwaggerGen
@@ -9,12 +11,20 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
         public void Apply(Operation operation, OperationFilterContext context)
         {
             if (context.ControllerActionDescriptor == null) return;
+            if (operation == null)
+            {
+                throw new ArgumentNullException(nameof(operation));
+            }
 
-            var swaggerResponseAttributes = context.ControllerActionDescriptor
-                .GetControllerAndActionAttributes(true)
-                .OfType<SwaggerResponseAttribute>();
+            if (context == null)
+            {
+                throw new ArgumentNullException(nameof(context));
+            }
 
-            if (!swaggerResponseAttributes.Any())
+            var apiDesc = context.ApiDescription;
+            var attributes = GetActionAttributes(apiDesc);
+
+            if (!attributes.Any())
                 return;
 
             if (operation.Responses == null)
@@ -22,7 +32,7 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
                 operation.Responses = new Dictionary<string, Response>();
             }
 
-            foreach (var attribute in swaggerResponseAttributes)
+            foreach (var attribute in attributes)
             {
                 ApplyAttribute(operation, context, attribute);
             }
@@ -43,6 +53,13 @@ namespace Swashbuckle.AspNetCore.SwaggerGen
                 response.Schema = context.SchemaRegistry.GetOrRegister(attribute.Type);
 
             operation.Responses[key] = response;
+        }
+
+        private static IEnumerable<SwaggerResponseAttribute> GetActionAttributes(ApiDescription apiDesc)
+        {
+            var controllerAttributes = apiDesc.ControllerAttributes().OfType<SwaggerResponseAttribute>();
+            var actionAttributes = apiDesc.ActionAttributes().OfType<SwaggerResponseAttribute>();
+            return controllerAttributes.Union(actionAttributes);
         }
     }
 }
